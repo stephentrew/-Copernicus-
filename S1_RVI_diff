@@ -13,7 +13,7 @@
 const DIAGNOSTIC_MODE = 1;
 
 // Set these to the two monthly-mosaic dates you want to compare.
-const OLDER_DATE = "2025-10-01";
+const OLDER_DATE = "2026-09-01";
 const NEWER_DATE = "2026-10-01";
 
 function setup() {
