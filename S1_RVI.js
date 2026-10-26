@@ -1,8 +1,32 @@
 //VERSION=3
-// Compare first and last Sentinel-1 GRD acquisitions
+// Sentinel-1 GRD IW RVI change:
+// latest available acquisition minus earliest available acquisition
 // within the selected Copernicus Browser time range.
 
-const DIAGNOSTIC_MODE = 0;
+// ============================
+// SETTINGS
+// ============================
+
+// DIAGNOSTIC_MODE:
+// 0 = final RVI difference map with colour ramp
+// 1 = number of valid acquisitions found
+// 2 = latest RVI
+// 3 = earliest RVI
+// 4 = RVI difference, stretched
+// 5 = latest VV
+// 6 = latest VH
+// 7 = latest VH / VV ratio
+
+const DIAGNOSTIC_MODE = 1;
+
+// Colour-ramp limits.
+// Differences outside these limits are clipped to the end colours.
+const MIN_DIFFERENCE = -0.30;
+const MAX_DIFFERENCE = 0.30;
+
+// ============================
+// SCRIPT
+// ============================
 
 function setup() {
   return {
@@ -10,12 +34,14 @@ function setup() {
     mosaicking: "ORBIT",
     output: [
       { id: "default", bands: 3, sampleType: "AUTO" },
-      { id: "diagnostic", bands: 1, sampleType: "FLOAT32" }
+      { id: "difference", bands: 1, sampleType: "FLOAT32" }
     ]
   };
 }
 
 function preProcessScenes(collections) {
+  // Use every valid IW GRD acquisition in the selected Browser time range.
+  // The script compares the earliest and latest available acquisitions.
   return collections;
 }
 
@@ -34,85 +60,201 @@ function getRvi(scene) {
   return (4 * vh) / (vv + vh);
 }
 
-function evaluatePixel(samples) {
-  const validScenes = samples.filter(scene => scene.dataMask === 1);
-  const count = validScenes.length;
+// Continuous colour ramp
+// Difference value -> colour
+function getRampColour(value) {
+  const ramp = [
+    [-0.30, 0x67001f], // strong loss - dark red
+    [-0.15, 0xc51b7d], // loss - magenta/pink
+    [-0.05, 0xfdae6b], // slight loss - orange
+    [ 0.00, 0xf7f7f7], // little change - pale grey
+    [ 0.05, 0xa1d99b], // slight increase - pale green
+    [ 0.15, 0x31a354], // increase - green
+    [ 0.30, 0x006d2c]  // strong increase - dark green
+  ];
 
-  let previous = null;
-  let current = null;
-  let rviPrevious = NaN;
-  let rviCurrent = NaN;
+  // Clip values outside ramp range
+  if (!isFinite(value)) {
+    return [0.15, 0.15, 0.15];
+  }
+
+  if (value <= MIN_DIFFERENCE) {
+    return hexToRgb(ramp[0][1]);
+  }
+
+  if (value >= MAX_DIFFERENCE) {
+    return hexToRgb(ramp[ramp.length - 1][1]);
+  }
+
+  // Find surrounding ramp points and interpolate
+  for (let i = 0; i < ramp.length - 1; i++) {
+    const lowerValue = ramp[i][0];
+    const upperValue = ramp[i + 1][0];
+
+    if (value >= lowerValue && value <= upperValue) {
+      const lowerColour = hexToRgb(ramp[i][1]);
+      const upperColour = hexToRgb(ramp[i + 1][1]);
+
+      const fraction =
+        (value - lowerValue) / (upperValue - lowerValue);
+
+      return [
+        lowerColour[0] + fraction * (upperColour[0] - lowerColour[0]),
+        lowerColour[1] + fraction * (upperColour[1] - lowerColour[1]),
+        lowerColour[2] + fraction * (upperColour[2] - lowerColour[2])
+      ];
+    }
+  }
+
+  return [0.15, 0.15, 0.15];
+}
+
+function hexToRgb(hex) {
+  return [
+    ((hex >> 16) & 255) / 255,
+    ((hex >> 8) & 255) / 255,
+    (hex & 255) / 255
+  ];
+}
+
+function evaluatePixel(samples) {
+  // Keep only valid pixels
+  const validScenes = samples.filter(scene => scene.dataMask === 1);
+  const sceneCount = validScenes.length;
+
+  let earlier = null;
+  let later = null;
+  let rviEarlier = NaN;
+  let rviLater = NaN;
   let difference = NaN;
 
-  if (count >= 2) {
-    previous = validScenes[0];
-    current = validScenes[count - 1];
+  if (sceneCount >= 2) {
+    earlier = validScenes[0];
+    later = validScenes[sceneCount - 1];
 
-    rviPrevious = getRvi(previous);
-    rviCurrent = getRvi(current);
+    rviEarlier = getRvi(earlier);
+    rviLater = getRvi(later);
 
-    if (isFinite(rviPrevious) && isFinite(rviCurrent)) {
-      difference = rviCurrent - rviPrevious;
+    if (isFinite(rviEarlier) && isFinite(rviLater)) {
+      difference = rviLater - rviEarlier;
     }
   }
 
-  const currentScene = count > 0 ? validScenes[count - 1] : null;
-  const currentRVI = currentScene ? getRvi(currentScene) : NaN;
+  // Values from the latest valid acquisition
+  const latestScene = sceneCount > 0 ? validScenes[sceneCount - 1] : null;
+  const latestVV = latestScene ? latestScene.VV : NaN;
+  const latestVH = latestScene ? latestScene.VH : NaN;
+  const latestRatio = latestScene ? latestVH / latestVV : NaN;
+  const latestRVI = latestScene ? getRvi(latestScene) : NaN;
 
   let diagnosticValue = NaN;
-  let r = 0;
-  let g = 0;
-  let b = 0;
+  let colour = [0, 0, 0];
 
-  if (DIAGNOSTIC_MODE === 1) {
-    diagnosticValue = count;
-
-    if (count === 0) {
-      r = 0; g = 0; b = 0;
-    } else if (count === 1) {
-      r = 1; g = 0.6; b = 0;
-    } else {
-      r = 0; g = 0.8; b = 0;
-    }
+  if (DIAGNOSTIC_MODE === 0) {
+    // Final RVI difference map
+    diagnosticValue = difference;
+    colour = getRampColour(difference);
   }
 
-  else if (DIAGNOSTIC_MODE === 0) {
-    diagnosticValue = difference;
+  else if (DIAGNOSTIC_MODE === 1) {
+    // How many valid acquisitions were found?
+    diagnosticValue = sceneCount;
 
-    if (!isFinite(difference)) {
-      r = 0.2; g = 0.2; b = 0.2;
-    } else if (difference < -0.15) {
-      r = 0.85; g = 0.05; b = 0.15;
-    } else if (difference < -0.05) {
-      r = 0.95; g = 0.55; b = 0.20;
-    } else if (difference <= 0.05) {
-      r = 0.90; g = 0.90; b = 0.90;
-    } else if (difference <= 0.15) {
-      r = 0.35; g = 0.75; b = 0.35;
+    if (sceneCount === 0) {
+      colour = [0, 0, 0]; // black = no acquisitions
+    } else if (sceneCount === 1) {
+      colour = [1, 0.6, 0]; // orange = one acquisition
     } else {
-      r = 0.05; g = 0.45; b = 0.10;
+      colour = [0, 0.8, 0]; // green = two or more acquisitions
     }
   }
 
   else if (DIAGNOSTIC_MODE === 2) {
-    diagnosticValue = currentRVI;
+    // Latest RVI
+    diagnosticValue = latestRVI;
 
-    if (!isFinite(currentRVI)) {
-      r = 0.2; g = 0.2; b = 0.2;
+    if (!isFinite(latestRVI)) {
+      colour = [0.2, 0.2, 0.2];
     } else {
-      r = 1 - currentRVI;
-      g = currentRVI;
-      b = 0;
+      colour = [1 - latestRVI, latestRVI, 0];
+    }
+  }
+
+  else if (DIAGNOSTIC_MODE === 3) {
+    // Earliest RVI
+    diagnosticValue = rviEarlier;
+
+    if (!isFinite(rviEarlier)) {
+      colour = [0.2, 0.2, 0.2];
+    } else {
+      colour = [1 - rviEarlier, rviEarlier, 0];
+    }
+  }
+
+  else if (DIAGNOSTIC_MODE === 4) {
+    // RVI difference, stretched for inspection
+    diagnosticValue = difference;
+
+    if (!isFinite(difference)) {
+      colour = [0.2, 0.2, 0.2];
+    } else {
+      const stretched = Math.max(
+        0,
+        Math.min(
+          1,
+          (difference - MIN_DIFFERENCE) /
+            (MAX_DIFFERENCE - MIN_DIFFERENCE)
+        )
+      );
+
+      colour = [1 - stretched, stretched, 0];
+    }
+  }
+
+  else if (DIAGNOSTIC_MODE === 5) {
+    // Latest VV backscatter
+    diagnosticValue = latestVV;
+
+    if (!isFinite(latestVV)) {
+      colour = [0.2, 0.2, 0.2];
+    } else {
+      const stretched = Math.max(0, Math.min(1, latestVV / 1));
+      colour = [stretched, stretched, stretched];
+    }
+  }
+
+  else if (DIAGNOSTIC_MODE === 6) {
+    // Latest VH backscatter
+    diagnosticValue = latestVH;
+
+    if (!isFinite(latestVH)) {
+      colour = [0.2, 0.2, 0.2];
+    } else {
+      const stretched = Math.max(0, Math.min(1, latestVH / 0.5));
+      colour = [stretched, stretched, stretched];
+    }
+  }
+
+  else if (DIAGNOSTIC_MODE === 7) {
+    // Latest VH / VV ratio
+    diagnosticValue = latestRatio;
+
+    if (!isFinite(latestRatio)) {
+      colour = [0.2, 0.2, 0.2];
+    } else {
+      const stretched = Math.max(0, Math.min(1, latestRatio / 1));
+      colour = [stretched, stretched, 0];
     }
   }
 
   else {
+    // Unknown diagnostic mode
     diagnosticValue = -999;
-    r = 1; g = 0; b = 1;
+    colour = [1, 0, 1];
   }
 
   return {
-    default: [r, g, b],
-    diagnostic: [diagnosticValue]
+    default: colour,
+    difference: [diagnosticValue]
   };
 }
