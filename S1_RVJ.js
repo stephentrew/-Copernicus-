@@ -12,6 +12,7 @@
 // 6 = current VH
 // 7 = current VH / VV ratio
 
+
 const DIAGNOSTIC_MODE = 1;
 
 // Change these to the exact IW GRD acquisition dates shown in Copernicus Browser.
