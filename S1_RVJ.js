@@ -21,10 +21,7 @@ const CURRENT_DATE = "2026-10-08";
 
 function setup() {
   return {
-    input: [{
-      datasource: "S1GRD",
-      bands: ["VV", "VH", "dataMask"]
-    }],
+    input: ["VV", "VH", "dataMask"],
     mosaicking: "ORBIT",
     output: [
       { id: "default", bands: 3, sampleType: "AUTO" },
@@ -39,7 +36,7 @@ function preProcessScenes(collections) {
     CURRENT_DATE
   ];
 
-  collections.S1GRD.scenes.orbits = collections.S1GRD.scenes.orbits.filter(
+  collections.scenes.orbits = collections.scenes.orbits.filter(
     orbit => allowedDates.includes(orbit.dateFrom.split("T")[0])
   );
 
@@ -62,7 +59,8 @@ function getRvi(scene) {
 }
 
 function evaluatePixel(samples) {
-  const scenes = samples.S1GRD;
+  // With no named datasource, samples is already the array of scenes.
+  const scenes = samples;
 
   // Keep only valid pixels
   const validScenes = scenes.filter(scene => scene.dataMask === 1);
