@@ -1,0 +1,81 @@
+//VERSION=3
+// Sentinel-1 Monthly Mosaic RVI change:
+// current month minus same month one year earlier
+
+function setup() {
+  return {
+    input: [{
+      datasource: "S1MOSAIC",
+      bands: ["VV", "VH"]
+    }],
+    mosaicking: "ORBIT",
+    output: [
+      { id: "default", bands: 3, sampleType: "AUTO" },
+      { id: "difference", bands: 1, sampleType: "FLOAT32" }
+    ]
+  };
+}
+
+// Change these to your two monthly-mosaic dates.
+// Use the first day of each monthly mosaic if that is how the product is dated.
+function preProcessScenes(collections) {
+  const allowedDates = [
+    "2025-10-01", // one year ago
+    "2026-10-01"  // current month
+  ];
+
+  collections.S1MOSAIC.scenes.orbits = collections.S1MOSAIC.scenes.orbits.filter(
+    orbit => allowedDates.includes(orbit.dateFrom.split("T")[0])
+  );
+
+  return collections;
+}
+
+function evaluatePixel(samples) {
+  const scenes = samples.S1MOSAIC;
+
+  // Need both dates to calculate a valid difference
+  if (scenes.length < 2) {
+    return {
+      default: [0, 0, 0],
+      difference: [NaN]
+    };
+  }
+
+  // Identify older and newer mosaic
+  let older, newer;
+
+  if (new Date(scenes[0].dateFrom) < new Date(scenes[1].dateFrom)) {
+    older = scenes[0];
+    newer = scenes[1];
+  } else {
+    older = scenes[1];
+    newer = scenes[0];
+  }
+
+  // Calculate RVI for each monthly mosaic
+  const rviOlder = (4 * older.VH) / (older.VV + older.VH);
+  const rviNewer = (4 * newer.VH) / (newer.VV + newer.VH);
+
+  const difference = rviNewer - rviOlder;
+
+  // Colour scale for RVI difference
+  let r, g, b;
+
+  if (difference < -0.15) {
+    r = 0.85; g = 0.05; b = 0.15; // strong loss - red
+  } else if (difference < -0.05) {
+    r = 0.95; g = 0.55; b = 0.20; // moderate loss - orange
+  } else if (difference <= 0.05) {
+    r = 0.90; g = 0.90; b = 0.90; // little change - pale grey
+  } else if (difference <= 0.15) {
+    r = 0.35; g = 0.75; b = 0.35; // moderate increase - light green
+  } else {
+    r = 0.05; g = 0.45; b = 0.10; // strong increase - dark green
+  }
+
+  return {
+    default: [r, g, b],
+    difference: [difference]
+  };
+}
