@@ -1,24 +1,34 @@
 //VERSION=3
-// Sentinel-2 NDWI anomaly:
-// latest acquisition compared with up to 5 previous valid acquisitions.
-// Detects values more than 2 SD from the earlier baseline.
+// Sentinel-2 L2A: show only significant vegetation-loss anomalies.
+// Compares the latest valid acquisition with up to 5 previous valid acquisitions.
 
-// ANOMALY_DIRECTION:
-// -1 = detect unusually low NDWI
-// 1 = detect unusually high NDWI
-// 0 = detect either unusually low or high NDWI
+// ============================
+// SETTINGS
+// ============================
 
-const DIAGNOSTIC_MODE = 0;
-const ANOMALY_DIRECTION = 0;
-const SD_THRESHOLD = 2.0;
+// INDEX_TYPE:
+// 0 = NDVI
+// 1 = NBR
+const INDEX_TYPE = 0;
+
+// SD_THRESHOLD:
+// 2 = show values more than 2 SD below baseline
+// 3 = show values more than 3 SD below baseline
+const SD_THRESHOLD = 2;
+
+// Maximum number of earlier valid acquisitions used as baseline
 const MAX_BASELINE_SCENES = 5;
+
+// ============================
+// SCRIPT
+// ============================
 
 function setup() {
   return {
-    input: ["B03", "B08", "SCL", "dataMask"],
+    input: ["B04", "B08", "B12", "SCL", "dataMask"],
     mosaicking: "ORBIT",
     output: [
-      { id: "default", bands: 3, sampleType: "AUTO" },
+      { id: "default", bands: 4, sampleType: "AUTO" },
       { id: "anomaly", bands: 1, sampleType: "FLOAT32" }
     ]
   };
@@ -27,25 +37,42 @@ function setup() {
 function isValid(scene) {
   return (
     scene.dataMask === 1 &&
-    scene.SCL !== 0 &&
-    scene.SCL !== 1 &&
-    scene.SCL !== 3 &&
-    scene.SCL !== 8 &&
-    scene.SCL !== 9 &&
-    scene.SCL !== 10 &&
-    scene.SCL !== 11
+    scene.SCL !== 0 && // no data
+    scene.SCL !== 1 && // saturated / defective
+    scene.SCL !== 3 && // cloud shadow
+    scene.SCL !== 8 && // cloud medium probability
+    scene.SCL !== 9 && // cloud high probability
+    scene.SCL !== 10 && // cirrus
+    scene.SCL !== 11 // snow / ice
   );
 }
 
-function getNdwi(scene) {
-  const green = scene.B03;
-  const nir = scene.B08;
+function getIndex(scene) {
+  if (INDEX_TYPE === 0) {
+    // NDVI = (NIR - Red) / (NIR + Red)
+    const red = scene.B04;
+    const nir = scene.B08;
 
-  if (!isFinite(green) || !isFinite(nir) || green + nir === 0) {
-    return NaN;
+    if (!isFinite(red) || !isFinite(nir) || red + nir === 0) {
+      return NaN;
+    }
+
+    return (nir - red) / (nir + red);
   }
 
-  return (green - nir) / (green + nir);
+  if (INDEX_TYPE === 1) {
+    // NBR = (NIR - SWIR) / (NIR + SWIR)
+    const nir = scene.B08;
+    const swir = scene.B12;
+
+    if (!isFinite(nir) || !isFinite(swir) || nir + swir === 0) {
+      return NaN;
+    }
+
+    return (nir - swir) / (nir + swir);
+  }
+
+  return NaN;
 }
 
 function evaluatePixel(samples) {
@@ -54,125 +81,70 @@ function evaluatePixel(samples) {
 
   if (sceneCount < 2) {
     return {
-      default: [0.15, 0.15, 0.15],
+      default: [0, 0, 0, 0],
       anomaly: [NaN]
     };
   }
 
+  // Most recent valid acquisition
   const latest = validScenes[sceneCount - 1];
-  const latestNdwi = getNdwi(latest);
+  const latestValue = getIndex(latest);
 
+  // Up to five earlier valid acquisitions
   const baselineScenes = validScenes
     .slice(0, sceneCount - 1)
     .slice(-MAX_BASELINE_SCENES);
 
   let sum = 0;
   let sumSquares = 0;
-  let validCount = 0;
+  let baselineCount = 0;
 
   for (let i = 0; i < baselineScenes.length; i++) {
-    const value = getNdwi(baselineScenes[i]);
+    const value = getIndex(baselineScenes[i]);
 
     if (isFinite(value)) {
       sum += value;
       sumSquares += value * value;
-      validCount++;
+      baselineCount++;
     }
   }
 
-  if (validCount < 2 || !isFinite(latestNdwi)) {
+  if (baselineCount < 2 || !isFinite(latestValue)) {
     return {
-      default: [0.15, 0.15, 0.15],
+      default: [0, 0, 0, 0],
       anomaly: [NaN]
     };
   }
 
-  const mean = sum / validCount;
-  const variance = (sumSquares / validCount) - (mean * mean);
+  const mean = sum / baselineCount;
+  const variance = (sumSquares / baselineCount) - (mean * mean);
   const sd = Math.sqrt(Math.max(0, variance));
 
-  const zScore = sd > 0 ? (latestNdwi - mean) / sd : 0;
+  const zScore = sd > 0 ? (latestValue - mean) / sd : 0;
 
-  let isAnomaly = false;
+  // Show only significant negative anomalies
+  const isAnomaly = zScore < -SD_THRESHOLD;
 
-  if (ANOMALY_DIRECTION === -1) {
-    isAnomaly = zScore < -SD_THRESHOLD;
-  } else if (ANOMALY_DIRECTION === 1) {
-    isAnomaly = zScore > SD_THRESHOLD;
+  if (!isAnomaly) {
+    return {
+      default: [0, 0, 0, 0],
+      anomaly: [NaN]
+    };
+  }
+
+  // Colour by severity:
+  // -2 SD = orange
+  // -3 SD or stronger = dark red
+  let r, g, b;
+
+  if (zScore <= -3) {
+    r = 0.65; g = 0.00; b = 0.05; // dark red: severe loss
   } else {
-    isAnomaly = Math.abs(zScore) > SD_THRESHOLD;
-  }
-
-  let diagnosticValue = NaN;
-  let r = 0;
-  let g = 0;
-  let b = 0;
-
-  if (DIAGNOSTIC_MODE === 0) {
-    diagnosticValue = zScore;
-
-    if (isAnomaly && zScore > 0) {
-      r = 0.05; g = 0.35; b = 0.85; // unusually wet / more water - blue
-    } else if (isAnomaly && zScore < 0) {
-      r = 0.85; g = 0.05; b = 0.10; // unusually dry / less water - red
-    } else if (Math.abs(zScore) > 1.0) {
-      r = 0.95; g = 0.75; b = 0.25; // near threshold - orange
-    } else {
-      r = 0.90; g = 0.90; b = 0.90; // normal - pale grey
-    }
-  }
-
-  else if (DIAGNOSTIC_MODE === 1) {
-    diagnosticValue = validCount;
-
-    if (validCount < 2) {
-      r = 0; g = 0; b = 0;
-    } else if (validCount < 5) {
-      r = 1; g = 0.6; b = 0;
-    } else {
-      r = 0; g = 0.8; b = 0;
-    }
-  }
-
-  else if (DIAGNOSTIC_MODE === 2) {
-    diagnosticValue = latestNdwi;
-    const stretched = Math.max(0, Math.min(1, (latestNdwi + 1) / 2));
-    r = 1 - stretched;
-    g = stretched;
-    b = 0;
-  }
-
-  else if (DIAGNOSTIC_MODE === 3) {
-    diagnosticValue = mean;
-    const stretched = Math.max(0, Math.min(1, (mean + 1) / 2));
-    r = 1 - stretched;
-    g = stretched;
-    b = 0;
-  }
-
-  else if (DIAGNOSTIC_MODE === 4) {
-    diagnosticValue = sd;
-    const stretched = Math.max(0, Math.min(1, sd / 0.2));
-    r = stretched;
-    g = stretched;
-    b = stretched;
-  }
-
-  else if (DIAGNOSTIC_MODE === 5) {
-    diagnosticValue = zScore;
-    const stretched = Math.max(0, Math.min(1, (zScore + 3) / 6));
-    r = 1 - stretched;
-    g = stretched;
-    b = 0;
-  }
-
-  else {
-    diagnosticValue = -999;
-    r = 1; g = 0; b = 1;
+    r = 0.95; g = 0.45; b = 0.10; // orange-red: significant loss
   }
 
   return {
-    default: [r, g, b],
-    anomaly: [diagnosticValue]
+    default: [r, g, b, 1],
+    anomaly: [zScore]
   };
 }
