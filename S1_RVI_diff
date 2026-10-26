@@ -20,7 +20,7 @@ function setup() {
 // Use the first day of each monthly mosaic if that is how the product is dated.
 function preProcessScenes(collections) {
   const allowedDates = [
-    "2025-10-01", // one year ago
+    "2026-09-01", // one month ago
     "2026-10-01"  // current month
   ];
 
