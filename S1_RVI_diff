@@ -10,7 +10,7 @@
 // 6 = current VH
 // 7 = current VH/VV ratio
 
-const DIAGNOSTIC_MODE = 2;
+const DIAGNOSTIC_MODE = 5;
 
 // Set these to the two monthly-mosaic dates you want to compare.
 const OLDER_DATE = "2026-09-01";
