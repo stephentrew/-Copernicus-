@@ -12,13 +12,12 @@
 // 6 = current VH
 // 7 = current VH / VV ratio
 
-
 const DIAGNOSTIC_MODE = 1;
 
 // Change these to the exact IW GRD acquisition dates shown in Copernicus Browser.
 // Use two dates from the SAME relative orbit wherever possible.
-const PREVIOUS_DATE = "2026-09-02";
-const CURRENT_DATE = "2026-10-08";
+const PREVIOUS_DATE = "2026-06-02";
+const CURRENT_DATE = "2026-10-20";
 
 function setup() {
   return {
