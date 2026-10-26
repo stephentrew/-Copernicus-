@@ -1,26 +1,29 @@
 //VERSION=3
-// Sentinel-1 Monthly Mosaic RVI difference - diagnostic version
-// Set DIAGNOSTIC_MODE to:
+// Sentinel-1 GRD RVI change:
+// current acquisition minus previous acquisition
+
+// DIAGNOSTIC_MODE:
 // 0 = final RVI difference map
-// 1 = number of matching monthly mosaics found
-// 2 = current RVI
-// 3 = previous-year / older RVI
-// 4 = RVI difference
+// 1 = number of matching dates found
+// 2 = current-date RVI
+// 3 = previous-date RVI
+// 4 = RVI difference, stretched
 // 5 = current VV
 // 6 = current VH
-// 7 = current VH/VV ratio
+// 7 = current VH / VV ratio
 
 const DIAGNOSTIC_MODE = 1;
 
-// Set these to the two monthly-mosaic dates you want to compare.
-const OLDER_DATE = "2025-10-01";
-const NEWER_DATE = "2026-10-01";
+// Change these to the exact IW GRD acquisition dates shown in Copernicus Browser.
+// Use two dates from the SAME relative orbit wherever possible.
+const PREVIOUS_DATE = "2026-09-02";
+const CURRENT_DATE = "2026-10-08";
 
 function setup() {
   return {
     input: [{
-      datasource: "S1MOSAIC",
-      bands: ["VV", "VH"]
+      datasource: "S1GRD",
+      bands: ["VV", "VH", "dataMask"]
     }],
     mosaicking: "ORBIT",
     output: [
@@ -32,11 +35,11 @@ function setup() {
 
 function preProcessScenes(collections) {
   const allowedDates = [
-    OLDER_DATE,
-    NEWER_DATE
+    PREVIOUS_DATE,
+    CURRENT_DATE
   ];
 
-  collections.S1MOSAIC.scenes.orbits = collections.S1MOSAIC.scenes.orbits.filter(
+  collections.S1GRD.scenes.orbits = collections.S1GRD.scenes.orbits.filter(
     orbit => allowedDates.includes(orbit.dateFrom.split("T")[0])
   );
 
@@ -44,10 +47,14 @@ function preProcessScenes(collections) {
 }
 
 function getRvi(scene) {
+  if (!scene || !isFinite(scene.VV) || !isFinite(scene.VH)) {
+    return NaN;
+  }
+
   const vv = scene.VV;
   const vh = scene.VH;
 
-  if (!isFinite(vv) || !isFinite(vh) || vv + vh === 0) {
+  if (vv + vh === 0) {
     return NaN;
   }
 
@@ -55,39 +62,44 @@ function getRvi(scene) {
 }
 
 function evaluatePixel(samples) {
-  const scenes = samples.S1MOSAIC;
-  const sceneCount = scenes.length;
+  const scenes = samples.S1GRD;
 
-  // Always calculate these if both scenes exist
-  let older = null;
-  let newer = null;
-  let rviOlder = NaN;
-  let rviNewer = NaN;
+  // Keep only valid pixels
+  const validScenes = scenes.filter(scene => scene.dataMask === 1);
+  const sceneCount = validScenes.length;
+
+  let previous = null;
+  let current = null;
+  let rviPrevious = NaN;
+  let rviCurrent = NaN;
   let difference = NaN;
 
   if (sceneCount >= 2) {
-    if (new Date(scenes[0].dateFrom) < new Date(scenes[1].dateFrom)) {
-      older = scenes[0];
-      newer = scenes[1];
+    if (
+      new Date(validScenes[0].dateFrom) <
+      new Date(validScenes[1].dateFrom)
+    ) {
+      previous = validScenes[0];
+      current = validScenes[1];
     } else {
-      older = scenes[1];
-      newer = scenes[0];
+      previous = validScenes[1];
+      current = validScenes[0];
     }
 
-    rviOlder = getRvi(older);
-    rviNewer = getRvi(newer);
+    rviPrevious = getRvi(previous);
+    rviCurrent = getRvi(current);
 
-    if (isFinite(rviOlder) && isFinite(rviNewer)) {
-      difference = rviNewer - rviOlder;
+    if (isFinite(rviPrevious) && isFinite(rviCurrent)) {
+      difference = rviCurrent - rviPrevious;
     }
   }
 
-  // Current scene values, if available
-  const current = sceneCount > 0 ? scenes[sceneCount - 1] : null;
-  const currentVV = current ? current.VV : NaN;
-  const currentVH = current ? current.VH : NaN;
-  const currentRatio = current ? currentVH / currentVV : NaN;
-  const currentRVI = current ? getRvi(current) : NaN;
+  // Values from the most recent valid acquisition
+  const currentScene = sceneCount > 0 ? validScenes[sceneCount - 1] : null;
+  const currentVV = currentScene ? currentScene.VV : NaN;
+  const currentVH = currentScene ? currentScene.VH : NaN;
+  const currentRatio = currentScene ? currentVH / currentVV : NaN;
+  const currentRVI = currentScene ? getRvi(currentScene) : NaN;
 
   let diagnosticValue = NaN;
   let r = 0;
@@ -99,7 +111,7 @@ function evaluatePixel(samples) {
     diagnosticValue = difference;
 
     if (!isFinite(difference)) {
-      r = 0.2; g = 0.2; b = 0.2; // dark grey = no valid comparison
+      r = 0.20; g = 0.20; b = 0.20; // dark grey = no valid comparison
     } else if (difference < -0.15) {
       r = 0.85; g = 0.05; b = 0.15; // strong loss - red
     } else if (difference < -0.05) {
@@ -114,11 +126,11 @@ function evaluatePixel(samples) {
   }
 
   else if (DIAGNOSTIC_MODE === 1) {
-    // How many matching monthly mosaics were found?
+    // How many matching valid dates were found?
     diagnosticValue = sceneCount;
 
     if (sceneCount === 0) {
-      r = 0; g = 0; b = 0; // black = no matching dates
+      r = 0; g = 0; b = 0; // black = neither date found
     } else if (sceneCount === 1) {
       r = 1; g = 0.6; b = 0; // orange = only one date found
     } else {
@@ -127,7 +139,7 @@ function evaluatePixel(samples) {
   }
 
   else if (DIAGNOSTIC_MODE === 2) {
-    // Current RVI
+    // Current-date RVI
     diagnosticValue = currentRVI;
 
     if (!isFinite(currentRVI)) {
@@ -140,20 +152,20 @@ function evaluatePixel(samples) {
   }
 
   else if (DIAGNOSTIC_MODE === 3) {
-    // Older RVI
-    diagnosticValue = rviOlder;
+    // Previous-date RVI
+    diagnosticValue = rviPrevious;
 
-    if (!isFinite(rviOlder)) {
+    if (!isFinite(rviPrevious)) {
       r = 0.2; g = 0.2; b = 0.2;
     } else {
-      r = 1 - rviOlder;
-      g = rviOlder;
+      r = 1 - rviPrevious;
+      g = rviPrevious;
       b = 0;
     }
   }
 
   else if (DIAGNOSTIC_MODE === 4) {
-    // RVI difference, stretched for inspection
+    // RVI difference, stretched from -0.3 to +0.3
     diagnosticValue = difference;
 
     if (!isFinite(difference)) {
@@ -209,7 +221,7 @@ function evaluatePixel(samples) {
   }
 
   else {
-    // Unknown mode
+    // Unknown diagnostic mode
     diagnosticValue = -999;
     r = 1; g = 0; b = 1;
   }
