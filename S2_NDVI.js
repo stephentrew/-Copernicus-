@@ -1,5 +1,5 @@
 //VERSION=3
-// Sentinel-2 L2A: show only significant vegetation-loss anomalies.
+// Sentinel-2 L2A: show only significant NDVI or NBR loss anomalies.
 // Compares the latest valid acquisition with up to 5 previous valid acquisitions.
 
 // ============================
@@ -19,6 +19,22 @@ const SD_THRESHOLD = 2;
 // Maximum number of earlier valid acquisitions used as baseline
 const MAX_BASELINE_SCENES = 5;
 
+// Maximum permitted cloud/shadow cover for a pixel, as a percentage
+// across all available acquisitions in the selected time range.
+// Set to 100 to disable this extra pixel-level cloud check.
+const MAX_PIXEL_CLOUD_COVER_PERCENT = 50;
+
+// DIAGNOSTIC_MODE:
+// 0 = anomaly map: only significant negative anomalies are visible
+// 1 = number of valid baseline scenes
+// 2 = latest NDVI or NBR
+// 3 = baseline mean
+// 4 = baseline standard deviation
+// 5 = z-score
+// 6 = pixel cloud-cover percentage
+
+const DIAGNOSTIC_MODE = 0;
+
 // ============================
 // SCRIPT
 // ============================
@@ -34,16 +50,21 @@ function setup() {
   };
 }
 
-function isValid(scene) {
+function isCloudOrShadow(scene) {
   return (
-    scene.dataMask === 1 &&
-    scene.SCL !== 0 && // no data
-    scene.SCL !== 1 && // saturated / defective
-    scene.SCL !== 3 && // cloud shadow
-    scene.SCL !== 8 && // cloud medium probability
-    scene.SCL !== 9 && // cloud high probability
-    scene.SCL !== 10 && // cirrus
-    scene.SCL !== 11 // snow / ice
+    scene.SCL === 3 || // cloud shadow
+    scene.SCL === 8 || // cloud medium probability
+    scene.SCL === 9 || // cloud high probability
+    scene.SCL === 10 // cirrus
+  );
+}
+
+function isInvalid(scene) {
+  return (
+    scene.dataMask !== 1 ||
+    scene.SCL === 0 || // no data
+    scene.SCL === 1 || // saturated / defective
+    scene.SCL === 11 // snow / ice
   );
 }
 
@@ -76,7 +97,39 @@ function getIndex(scene) {
 }
 
 function evaluatePixel(samples) {
-  const validScenes = samples.filter(isValid);
+  const totalScenes = samples.length;
+
+  if (totalScenes === 0) {
+    return {
+      default: [0, 0, 0, 0],
+      anomaly: [NaN]
+    };
+  }
+
+  // Calculate cloud/shadow percentage for this pixel
+  let cloudCount = 0;
+
+  for (let i = 0; i < totalScenes; i++) {
+    if (samples[i].dataMask === 1 && isCloudOrShadow(samples[i])) {
+      cloudCount++;
+    }
+  }
+
+  const cloudCoverPercent = (cloudCount / totalScenes) * 100;
+
+  // Exclude pixels that are too often cloudy or shadowed
+  if (cloudCoverPercent > MAX_PIXEL_CLOUD_COVER_PERCENT) {
+    return {
+      default: [0, 0, 0, 0],
+      anomaly: [NaN]
+    };
+  }
+
+  // Keep only clear, usable acquisitions
+  const validScenes = samples.filter(
+    scene => scene.dataMask === 1 && !isCloudOrShadow(scene) && !isInvalid(scene)
+  );
+
   const sceneCount = validScenes.length;
 
   if (sceneCount < 2) {
@@ -133,7 +186,7 @@ function evaluatePixel(samples) {
   }
 
   // Colour by severity:
-  // -2 SD = orange
+  // -2 SD = orange-red
   // -3 SD or stronger = dark red
   let r, g, b;
 
