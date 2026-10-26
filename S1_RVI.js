@@ -2,7 +2,7 @@
 // Compare first and last Sentinel-1 GRD acquisitions
 // within the selected Copernicus Browser time range.
 
-const DIAGNOSTIC_MODE = 1;
+const DIAGNOSTIC_MODE = 0;
 
 function setup() {
   return {
